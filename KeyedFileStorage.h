@@ -48,6 +48,7 @@ extern const NSUInteger KFErrorFileNotInUse;
 
 - (BOOL) createWithRootDirectory:(NSURL*)rootDirectory error:(NSError**)error;
 - (BOOL) createInDocumentsSubdirectoryWithName:(NSString*)name error:(NSError**)error;
+- (BOOL) createInCacheSubdirectoryWithName:(NSString*)name error:(NSError**)error;
 - (void) cleanup;
 
 // Moves file into storage synchronously

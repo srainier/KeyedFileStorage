@@ -152,6 +152,23 @@ const NSUInteger KFErrorFileNotInUse = 0x34;
   return [self createWithRootDirectory:[NSURL fileURLWithPath:subdirectoryPath] error:error];
 }
 
+- (BOOL) createInCacheSubdirectoryWithName:(NSString*)name error:(NSError**)error {
+  
+  NSArray* directories = [[NSFileManager defaultManager] URLsForDirectory:NSCachesDirectory inDomains:NSUserDomainMask];
+  if (1 < directories.count) {
+    NSLog(@"More than one caches directories: %d, %@", directories.count, directories);
+  }
+  
+  // pick the first - it's the user (rather than system) caches directory.
+  NSURL* userCachesDirectory = [directories objectAtIndex:0];
+  
+  // Assemble the full path with the subdirectory.
+  NSString* subdirectoryPath = [userCachesDirectory.relativePath stringByAppendingPathComponent:name];
+  
+  // Create/initialized the file store.
+  return [self createWithRootDirectory:[NSURL fileURLWithPath:subdirectoryPath] error:error];
+}
+
 - (void) cleanup {
   [self throwIfNotMainQueue];
   [self throwIfNotCreated];

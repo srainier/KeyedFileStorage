@@ -49,6 +49,8 @@ const NSUInteger KFErrorFileNotInUse = 0x34;
   BOOL isCreated_;
   NSURL* rootDirectory_;
   NSMutableSet* protectedFiles_;
+  NSMutableSet* pendingAddDataKeys_;
+  NSMutableSet* pendingDeleteDataKeys_;
   dispatch_queue_t file_queue_;
   BOOL isCleaningUpQueue_;
 }
@@ -127,6 +129,8 @@ const NSUInteger KFErrorFileNotInUse = 0x34;
     
     // Setup member objects
     protectedFiles_ = [[NSMutableSet alloc] init];
+    pendingAddDataKeys_ = [[NSMutableSet alloc] init];
+    pendingDeleteDataKeys_ = [[NSMutableSet alloc] init];
     
     // Mark as created
     isCreated_ = YES;
@@ -315,6 +319,77 @@ const NSUInteger KFErrorFileNotInUse = 0x34;
 
   return YES;
 }
+
+- (BOOL) hasDataWithKey:(NSString*)key {
+  [self throwIfNotMainQueue];
+  [self throwIfNotCreated];
+  
+  // Data is read/returned and deleted asyncronously, so it is not enough to just check if
+  // the backing file is contained on disk.  The asynchronous operations are accounted for
+  // with their keys stored in the two sets, so check for those before checking disk.
+  if ([pendingDeleteDataKeys_ containsObject:key]) {
+    return NO;
+  } else if ([pendingAddDataKeys_ containsObject:key]) {
+    return YES;
+  } else {
+    return [[NSFileManager defaultManager] fileExistsAtPath:[[self fileUrlForKey:key] relativePath]];
+  }
+}
+
+- (BOOL) storeData:(NSData*)data withKey:(NSString*)key overwrite:(BOOL)overwrite error:(NSError**)error {
+  
+}
+
+
+- (BOOL) storeFile:(NSURL*)fileUrl withKey:(NSString*)key overwrite:(BOOL)overwrite error:(NSError**)error {
+  [self throwIfNotMainQueue];
+  [self throwIfNotCreated];
+  
+  NSFileManager* fileManager = [NSFileManager defaultManager];
+  if (![fileManager fileExistsAtPath:fileUrl.relativePath]) {
+    @throw [NSException exceptionWithName:@"KFSError" reason:[NSString stringWithFormat:@"Input file %@ doesn't exist", fileUrl] userInfo:nil];
+  }
+  
+  // Get the internal url for the key.
+  NSURL* storedFileUrl = [self fileUrlForKey:key];
+  
+  // Check that we have permission to overwrite the file, if it exists.
+  if (!overwrite && [fileManager fileExistsAtPath:storedFileUrl.relativePath]) {
+    @throw [NSException exceptionWithName:@"KFSException" reason:@"File exists and overwrite set to NO" userInfo:nil];
+  }
+  
+  // NOTE: assuming this will just work to overwrite existing files if I have write priviledges.
+  return [fileManager moveItemAtURL:fileUrl toURL:storedFileUrl error:error];
+}
+
+- (NSString*) storeNewFile:(NSURL*)fileUrl error:(NSError**)error {
+  [self throwIfNotMainQueue];
+  [self throwIfNotCreated];
+  
+  NSString* newKey = [KeyedFileStorage uniqueKey];
+  if ([self storeFile:fileUrl withKey:newKey overwrite:NO error:error]) {
+    return newKey;
+  } else {
+    return nil;
+  }
+}
+
+- (NSString*) storeNewData:(NSData*)data error:(NSError**)error {
+  [self throwIfNotMainQueue];
+  [self throwIfNotCreated];
+  
+  NSString* newKey = [KeyedFileStorage uniqueKey];
+  if ([self storeData:data withKey:newKey overwrite:NO error:error]) {
+    return newKey;
+  } else {
+    return nil;
+  }
+}
+
+- (BOOL) deleteDataWithKey:(NSString*)key error:(NSError**)error;
+- (void) dataWithKey:(NSString*)key callback:(void (^)(NSError* error, NSData* data))callback;
+- (void) dataWithKey:(NSString*)key queue:(dispatch_queue_t)queue callback:(void (^)(NSError* error, NSData* data))callback;
+
 
 //
 // Helpers

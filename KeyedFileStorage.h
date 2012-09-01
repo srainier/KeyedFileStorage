@@ -63,4 +63,11 @@ extern const NSUInteger KFErrorFileNotInUse;
 - (NSURL*) useFileWithKey:(NSString*)key error:(NSError**)error;
 - (BOOL) releaseFileWithKey:(NSString*)key error:(NSError**)error;
 
+- (BOOL) hasDataWithKey:(NSString*)key;
+- (BOOL) storeData:(NSData*)data withKey:(NSString*)key overwrite:(BOOL)overwrite error:(NSError**)error;
+- (NSString*) storeNewData:(NSData*)data error:(NSError**)error;
+- (BOOL) deleteDataWithKey:(NSString*)key error:(NSError**)error;
+- (void) dataWithKey:(NSString*)key callback:(void (^)(NSError* error, NSData* data))callback;
+- (void) dataWithKey:(NSString*)key queue:(dispatch_queue_t)queue callback:(void (^)(NSError* error, NSData* data))callback;
+
 @end

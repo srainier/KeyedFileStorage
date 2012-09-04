@@ -49,16 +49,15 @@ const NSUInteger KFErrorFileNotInUse = 0x34;
   BOOL isCreated_;
   NSURL* rootDirectory_;
   NSMutableSet* protectedFiles_;
-  NSMutableSet* pendingAddDataKeys_;
-  NSMutableSet* pendingDeleteDataKeys_;
-  dispatch_queue_t file_queue_;
+  dispatch_queue_t access_queue_;
+  dispatch_queue_t data_file_queue_;
   BOOL isCleaningUpQueue_;
 }
 
 // These two methods are used to check for proper queue
 // execution.
 - (void) throwIfNotQueue:(dispatch_queue_t)q;
-- (void) throwIfNotMainQueue;
+- (void) throwIfNotAccessQueue;
 
 // This methods protects against attempted file access before
 // the object is setup.
@@ -74,16 +73,8 @@ const NSUInteger KFErrorFileNotInUse = 0x34;
 // for a given key.
 - (NSURL*) fileUrlForKey:(NSString*)key;
 
-// This helper method performs work of retrieving data from disk
-// for the given key and returns it asynchronously, on the main
-// queue, to the caller.
-// Possible callbacks:
-//   callback(nil, <valid data>) - Data was successfully loaded from disk.
-//   callback(<error>, nil) - An unrecoverable error occurred.
-//   callback(nil, nil) - No error occurred, but no data existed for the
-//     given key.  A KFNeedFileNotification is sent with the key as the
-//     notification's object.
-//- (void) getFileDataFromDiskWithKey:(NSString*)key callback:(void (^)(NSError* error, NSData* fileData))callback;
+- (void) accessDataWithKey:(NSString*)key access_block:(void (^)(NSURL*, NSError**))access_block callback:(void (^)(NSError*))callback;
+- (void) storeData:(NSData*)data forKey:(NSString*)key overwrite:(BOOL)overwrite callback:(void (^)(NSError*))callback;
 
 @end
 
@@ -109,6 +100,11 @@ const NSUInteger KFErrorFileNotInUse = 0x34;
 }
 
 - (BOOL) createWithRootDirectory:(NSURL*)rootDirectory error:(NSError**)error {
+  return [self createWithRootDirectory:rootDirectory access_queue:dispatch_get_current_queue() error:error];
+}
+
+- (BOOL) createWithRootDirectory:(NSURL*)rootDirectory access_queue:(dispatch_queue_t)access_queue error:(NSError**)error {
+
   if (isCreated_) {
     [self throwProtectionErrorWithMessage:@"Already created"];
   }
@@ -122,15 +118,14 @@ const NSUInteger KFErrorFileNotInUse = 0x34;
   
   if (directoryExists) {
     rootDirectory_ = rootDirectory;
+    access_queue_ = access_queue;
 
     // create queue
-    file_queue_ = dispatch_queue_create("com.srainier.KFS", NULL);
+    data_file_queue_ = dispatch_queue_create("com.srainier.KFS", NULL);
     isCleaningUpQueue_ = NO;
     
     // Setup member objects
     protectedFiles_ = [[NSMutableSet alloc] init];
-    pendingAddDataKeys_ = [[NSMutableSet alloc] init];
-    pendingDeleteDataKeys_ = [[NSMutableSet alloc] init];
     
     // Mark as created
     isCreated_ = YES;
@@ -140,6 +135,10 @@ const NSUInteger KFErrorFileNotInUse = 0x34;
 }
 
 - (BOOL) createInDocumentsSubdirectoryWithName:(NSString*)name error:(NSError**)error {
+  return [self createInDocumentsSubdirectoryWithName:name access_queue:NULL error:error];
+}
+
+- (BOOL) createInDocumentsSubdirectoryWithName:(NSString*)name access_queue:(dispatch_queue_t)access_queue error:(NSError**)error {
   
   NSArray* directories = [[NSFileManager defaultManager] URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask];
   if (1 < directories.count) {
@@ -153,10 +152,16 @@ const NSUInteger KFErrorFileNotInUse = 0x34;
   NSString* subdirectoryPath = [userDocumentsDirectory.relativePath stringByAppendingPathComponent:name];
   
   // Create/initialized the file store.
-  return [self createWithRootDirectory:[NSURL fileURLWithPath:subdirectoryPath] error:error];
+  return [self createWithRootDirectory:[NSURL fileURLWithPath:subdirectoryPath]
+                          access_queue:(NULL == access_queue) ? dispatch_get_current_queue() : access_queue
+                                 error:error];
 }
 
 - (BOOL) createInCacheSubdirectoryWithName:(NSString*)name error:(NSError**)error {
+  return [self createInCacheSubdirectoryWithName:name access_queue:NULL error:error];
+}
+
+- (BOOL) createInCacheSubdirectoryWithName:(NSString*)name access_queue:(dispatch_queue_t)access_queue error:(NSError **)error{
   
   NSArray* directories = [[NSFileManager defaultManager] URLsForDirectory:NSCachesDirectory inDomains:NSUserDomainMask];
   if (1 < directories.count) {
@@ -170,20 +175,22 @@ const NSUInteger KFErrorFileNotInUse = 0x34;
   NSString* subdirectoryPath = [userCachesDirectory.relativePath stringByAppendingPathComponent:name];
   
   // Create/initialized the file store.
-  return [self createWithRootDirectory:[NSURL fileURLWithPath:subdirectoryPath] error:error];
+  return [self createWithRootDirectory:[NSURL fileURLWithPath:subdirectoryPath]
+                          access_queue:(NULL == access_queue) ? dispatch_get_current_queue() : access_queue
+                                 error:error];
 }
 
 - (void) cleanup {
-  [self throwIfNotMainQueue];
+  [self throwIfNotAccessQueue];
   [self throwIfNotCreated];
 
   if (isCreated_) {
     // release the queue.
     isCleaningUpQueue_ = YES;
-    dispatch_sync(file_queue_, ^{
+    dispatch_sync(data_file_queue_, ^{
       // Just wait for this to complete to guarantee the queue is empty.
     });
-    dispatch_release(file_queue_);
+    dispatch_release(data_file_queue_);
     
     // Cleanup member objects
     rootDirectory_ = nil;
@@ -191,18 +198,22 @@ const NSUInteger KFErrorFileNotInUse = 0x34;
   }
 }
 
+//
+// Synchronous file access methods
+//
 
 - (BOOL) hasFileWithKey:(NSString*)key {
-  [self throwIfNotMainQueue];
+  [self throwIfNotAccessQueue];
   [self throwIfNotCreated];
   
   return [[NSFileManager defaultManager] fileExistsAtPath:[[self fileUrlForKey:key] relativePath]];
 }
 
 - (BOOL) storeFile:(NSURL*)fileUrl withKey:(NSString*)key overwrite:(BOOL)overwrite error:(NSError**)error {
-  [self throwIfNotMainQueue];
+  [self throwIfNotAccessQueue];
   [self throwIfNotCreated];
 
+  // Verify that the input file exists.
   NSFileManager* fileManager = [NSFileManager defaultManager];
   if (![fileManager fileExistsAtPath:fileUrl.relativePath]) {
     @throw [NSException exceptionWithName:@"KFSError" reason:[NSString stringWithFormat:@"Input file %@ doesn't exist", fileUrl] userInfo:nil];
@@ -221,9 +232,7 @@ const NSUInteger KFErrorFileNotInUse = 0x34;
 }
 
 - (NSString*) storeNewFile:(NSURL*)fileUrl error:(NSError**)error {
-  [self throwIfNotMainQueue];
-  [self throwIfNotCreated];
-  
+
   NSString* newKey = [KeyedFileStorage uniqueKey];
   if ([self storeFile:fileUrl withKey:newKey overwrite:NO error:error]) {
     return newKey;
@@ -233,12 +242,10 @@ const NSUInteger KFErrorFileNotInUse = 0x34;
 }
 
 - (BOOL) deleteFileWithKey:(NSString*)key error:(NSError**)error {
-  [self throwIfNotMainQueue];
+  [self throwIfNotAccessQueue];
   [self throwIfNotCreated];
 
-  // Get the internal url for the key.
-  NSURL* storedFileUrl = [self fileUrlForKey:key];
-  
+  // Fail gracefully if the file is in use.
   if ([protectedFiles_ containsObject:key]) {
     // Don't delete the file if it is in use.
     if (nil != error) {
@@ -247,6 +254,9 @@ const NSUInteger KFErrorFileNotInUse = 0x34;
     return NO;
   }
 
+  // Get the internal url for the key.
+  NSURL* storedFileUrl = [self fileUrlForKey:key];
+  
   // Delete the file, if it exists.
   NSFileManager* fileManager = [NSFileManager defaultManager];
   if ([fileManager fileExistsAtPath:storedFileUrl.relativePath]) {
@@ -257,7 +267,7 @@ const NSUInteger KFErrorFileNotInUse = 0x34;
 }
 
 - (void) accessFileWithKey:(NSString*)key accessBlock:(void (^)(NSError *error, NSURL *storedFileUrl))accessBlock {
-  [self throwIfNotMainQueue];
+  [self throwIfNotAccessQueue];
   [self throwIfNotCreated];
 
   if ([protectedFiles_ containsObject:key]) {
@@ -283,9 +293,10 @@ const NSUInteger KFErrorFileNotInUse = 0x34;
 }
 
 - (NSURL*) useFileWithKey:(NSString*)key error:(NSError**)error {
-  [self throwIfNotMainQueue];
+  [self throwIfNotAccessQueue];
   [self throwIfNotCreated];
 
+  // Fail gracefully if no such file exists.
   if (![self hasFileWithKey:key]) {
     if (nil != error) {
       *error = [NSError errorWithDomain:KFErrorDomain code:0 userInfo:nil];
@@ -309,7 +320,7 @@ const NSUInteger KFErrorFileNotInUse = 0x34;
 }
 
 - (BOOL) releaseFileWithKey:(NSString*)key error:(NSError**)error {
-  [self throwIfNotMainQueue];
+  [self throwIfNotAccessQueue];
   [self throwIfNotCreated];
 
   // Don't allow use if file already in use.
@@ -320,80 +331,73 @@ const NSUInteger KFErrorFileNotInUse = 0x34;
   return YES;
 }
 
-- (BOOL) hasDataWithKey:(NSString*)key {
-  [self throwIfNotMainQueue];
-  [self throwIfNotCreated];
+//
+// Asynchronous data access methods.
+//
+
+- (void) storeNewData:(NSData*)data callback:(void (^)(NSError*, NSString*))callback {
+  // Create a new key for the data.
+  NSString* key = [KeyedFileStorage uniqueKey];
   
-  // Data is read/returned and deleted asyncronously, so it is not enough to just check if
-  // the backing file is contained on disk.  The asynchronous operations are accounted for
-  // with their keys stored in the two sets, so check for those before checking disk.
-  if ([pendingDeleteDataKeys_ containsObject:key]) {
-    return NO;
-  } else if ([pendingAddDataKeys_ containsObject:key]) {
-    return YES;
-  } else {
-    return [[NSFileManager defaultManager] fileExistsAtPath:[[self fileUrlForKey:key] relativePath]];
-  }
+  // Store the data, failing if data somehow already exists.
+  [self storeData:data
+           forKey:key
+        overwrite:NO
+         callback:^(NSError * error) {
+           callback(error, (nil == error) ? key : nil);
+         }];
 }
 
-- (BOOL) storeData:(NSData*)data withKey:(NSString*)key overwrite:(BOOL)overwrite error:(NSError**)error {
-  
+- (void) storeExistingData:(NSData*)data withKey:(NSString*)key callback:(void (^)(NSError*))callback {
+  // Simply call the helper.
+  [self storeData:data
+           forKey:key
+        overwrite:YES
+         callback:callback];
 }
 
 
-- (BOOL) storeFile:(NSURL*)fileUrl withKey:(NSString*)key overwrite:(BOOL)overwrite error:(NSError**)error {
-  [self throwIfNotMainQueue];
-  [self throwIfNotCreated];
-  
-  NSFileManager* fileManager = [NSFileManager defaultManager];
-  if (![fileManager fileExistsAtPath:fileUrl.relativePath]) {
-    @throw [NSException exceptionWithName:@"KFSError" reason:[NSString stringWithFormat:@"Input file %@ doesn't exist", fileUrl] userInfo:nil];
-  }
-  
-  // Get the internal url for the key.
-  NSURL* storedFileUrl = [self fileUrlForKey:key];
-  
-  // Check that we have permission to overwrite the file, if it exists.
-  if (!overwrite && [fileManager fileExistsAtPath:storedFileUrl.relativePath]) {
-    @throw [NSException exceptionWithName:@"KFSException" reason:@"File exists and overwrite set to NO" userInfo:nil];
-  }
-  
-  // NOTE: assuming this will just work to overwrite existing files if I have write priviledges.
-  return [fileManager moveItemAtURL:fileUrl toURL:storedFileUrl error:error];
+- (void) deleteDataWithKey:(NSString*)key callback:(void (^)(NSError*))callback {
+
+  [self accessDataWithKey:key access_block:^(NSURL * storedDataUrl, NSError *__autoreleasing * error) {
+    
+    // Remove the data file if it exists.  If it doesn't exists then that's as good as removing it.
+    NSFileManager* fileManager = [NSFileManager defaultManager];
+    if ([fileManager fileExistsAtPath:storedDataUrl.relativeString]) {
+      [fileManager removeItemAtURL:storedDataUrl error:error];
+    }
+    
+  } callback:^(NSError * error) {
+    callback(error);
+  }];
 }
 
-- (NSString*) storeNewFile:(NSURL*)fileUrl error:(NSError**)error {
-  [self throwIfNotMainQueue];
-  [self throwIfNotCreated];
-  
-  NSString* newKey = [KeyedFileStorage uniqueKey];
-  if ([self storeFile:fileUrl withKey:newKey overwrite:NO error:error]) {
-    return newKey;
-  } else {
-    return nil;
-  }
-}
+- (void) dataWithKey:(NSString*)key callback:(void (^)(NSError* error, NSData* data))callback {
 
-- (NSString*) storeNewData:(NSData*)data error:(NSError**)error {
-  [self throwIfNotMainQueue];
-  [self throwIfNotCreated];
-  
-  NSString* newKey = [KeyedFileStorage uniqueKey];
-  if ([self storeData:data withKey:newKey overwrite:NO error:error]) {
-    return newKey;
-  } else {
-    return nil;
-  }
-}
+  // Data read in the access block will be stored here and returned via the callback
+  // block, assuming everything works properly.
+  __block NSData* data = nil;
 
-- (BOOL) deleteDataWithKey:(NSString*)key error:(NSError**)error;
-- (void) dataWithKey:(NSString*)key callback:(void (^)(NSError* error, NSData* data))callback;
-- (void) dataWithKey:(NSString*)key queue:(dispatch_queue_t)queue callback:(void (^)(NSError* error, NSData* data))callback;
+  [self accessDataWithKey:key access_block:^(NSURL * storedDataUrl, NSError *__autoreleasing * error) {
+    // Read the file into the data if it exists on disk.
+    if ([[NSFileManager defaultManager] fileExistsAtPath:storedDataUrl.relativeString]) {
+      data = [NSData dataWithContentsOfURL:storedDataUrl options:NSDataReadingUncached error:error];
+    } else {
+      if (nil != error) {
+        *error = [NSError errorWithDomain:KFErrorDomain code:0 userInfo:nil];
+      }
+    }
+    
+  } callback:^(NSError * error) {
+    callback(error, (nil == error) ? data : nil);
+  }];
+}
 
 
 //
 // Helpers
 //
+
 - (void) throwIfNotQueue:(dispatch_queue_t)q {
   if (q != dispatch_get_current_queue()) {
     NSAssert(q != dispatch_get_current_queue(), @"Input queue should be current queue");
@@ -401,7 +405,7 @@ const NSUInteger KFErrorFileNotInUse = 0x34;
   }
 }
 
-- (void) throwIfNotMainQueue {
+- (void) throwIfNotAccessQueue {
   [self throwIfNotQueue:dispatch_get_main_queue()];
 }
 
@@ -441,103 +445,88 @@ const NSUInteger KFErrorFileNotInUse = 0x34;
   }
 }
 
-/*
-- (void) getFileDataFromDiskWithKey:(NSString*)key callback:(void (^)(NSError* error, NSData* fileData))callback {
-  if (isCleaningUpQueue_) {
-    // Return that file access is no longer allowed.
-    callback([NSError errorWithDomain:KFErrorDomain code:KFErrorCleaningUp userInfo:nil], nil);
-    
-  } else {
-    
-    // Protect the background queue with a background task, so that
-    // sudden termination doesn't kill a task in process.
-    UIBackgroundTaskIdentifier backgroundID = 
-    [[UIApplication sharedApplication] beginBackgroundTaskWithExpirationHandler:^{
-      // If the background task is taking too long, I presume either the queued block
-      // won't get executed (ok) or the executing block will be forceably terminated.
-      // I think the forceable termination is OK because we aren't mutating any data.
-      callback([NSError errorWithDomain:KFErrorDomain code:KFErrorAppEnteringBackground userInfo:nil], nil);
-    }];
-    
-    if (UIBackgroundTaskInvalid == backgroundID) {
-      // Couldn't get a background ID, so don't even try to retrieve from disk.
-      callback([NSError errorWithDomain:KFErrorDomain code:KFErrorAppEnteringBackground userInfo:nil], nil);
-      
-    } else {
-      
-      dispatch_async(file_queue_, ^{
+- (void) accessDataWithKey:(NSString*)key access_block:(void (^)(NSURL*, NSError**))access_block callback:(void (^)(NSError*))callback {
+  // Don't even bother if the storage hasn't been setup yet.
+  [self throwIfNotCreated];
 
-        @try {
-          // Get ready to look for the file.
-          NSFileManager* fm = [NSFileManager defaultManager];
-          BOOL isDirectory = YES;
-          NSURL* fileUrl = [self fileUrlForKey:key];
-          
-          if ([fm fileExistsAtPath:fileUrl.path isDirectory:&isDirectory]) {
-            if (isDirectory) {
-              // File exists, but it's a directory.  That's bad and probably means the
-              // user entered a bad key.  Return an error.
-              dispatch_async(dispatch_get_main_queue(), ^{
-                [[UIApplication sharedApplication] endBackgroundTask:backgroundID];
-                callback([NSError errorWithDomain:KFErrorDomain code:KFErrorFileConflict userInfo:nil], nil);
-              });
-              
-            } else {
-              // Load the file data into memory in the background.
-              NSData* fileData = nil;
-              @try {
-                fileData = [NSData dataWithContentsOfURL:fileUrl];
-              }
-              @catch (NSException *exception) {
-                // Just catching
-              }
-              
-              // Return the file data to the main queue.
-              dispatch_async(dispatch_get_main_queue(), ^{                
-                [[UIApplication sharedApplication] endBackgroundTask:backgroundID];
-                
-                if (nil != fileData) {
-                  // Cache the file data
-                  [cachedFileData_ setObject:fileData forKey:key];
-                  
-                  // Give the data to the user.
-                  callback(nil, fileData);
-                  
-                } else {
-                  callback([NSError errorWithDomain:KFErrorDomain code:KFErrorBadData userInfo:nil], nil);
-                }
-              });
-            }
-          } else {
-            // Nothing exists for the key.  Send a notification to whomever is listening that
-            // data was requested for the given key, and that it needs to be set into
-            // here so that the requester can get it... eventually.
-            dispatch_async(dispatch_get_main_queue(), ^{
-              @try {
-                // Callback - no data, but not an error, means data request is being sent.
-                callback(nil, nil);
-                // Send data request
-                [[NSNotificationCenter defaultCenter] postNotificationName:KFNeedFileNotification object:key];
-              }
-              @catch (NSException *exception) {
-                callback([NSError errorWithDomain:KFErrorDomain code:KFErrorUnexpectedCallbackError userInfo:nil], nil);
-              }
-              @finally {
-                [[UIApplication sharedApplication] endBackgroundTask:backgroundID];
-              }
-            });
-          }      
-        }
-        @catch (NSException *exception) {
-          callback([NSError errorWithDomain:KFErrorDomain code:KFErrorUnexpectedReadError userInfo:nil], nil);
-        }
-        @finally {
-          [[UIApplication sharedApplication] endBackgroundTask:backgroundID];
+  // Enforce queue safety.
+  [self throwIfNotAccessQueue];
+  
+  // Setup the task to run in the background.
+  __block BOOL callbackPerformed = NO;
+  UIBackgroundTaskIdentifier backgroundTaskID = [[UIApplication sharedApplication] beginBackgroundTaskWithExpirationHandler:^{
+    if (!callback) {
+      callbackPerformed = YES;
+      
+      // Callback that the task failed.
+      callback([NSError errorWithDomain:KFErrorDomain code:0 userInfo:nil]);
+    }
+  }];
+  
+  if (UIBackgroundTaskInvalid == backgroundTaskID) {
+    // Backgrounding isn't allowed, so don't attempt access.
+    // Dispatching because the interface needs all callbacks to be asynchronous.
+    // Not sure if there's a conflict with backgrounding here...
+    dispatch_async(access_queue_, ^{
+      callback([NSError errorWithDomain:KFErrorDomain code:0 userInfo:nil]);
+    });
+
+  } else {
+  
+    // Create the file url for the key.  This will create the appropriate directories
+    // in the path.  Also do this in the main queue so that the key doesn't have to
+    // be copied to ensure immutability.
+    NSURL* storedDataUrl = [self fileUrlForKey:key];
+    
+    // All data-file access should occur in this background queue.
+    dispatch_async(data_file_queue_, ^{
+      
+      // Protect the access block from crashing the queue.
+      NSError* error = nil;
+      @try {
+        access_block(storedDataUrl, &error);
+      }
+      @catch (NSException *exception) {
+        NSLog(@"Error accessing KFS data: %@", exception.description);
+        error = [NSError errorWithDomain:KFErrorDomain code:0 userInfo:nil];
+      }
+      
+      dispatch_async(access_queue_, ^{
+        if (!callbackPerformed) {
+          callbackPerformed = YES;
+          // Protect the callback from crashing the access queue.
+          @try {
+            callback(error);
+          }
+          @catch (NSException *exception) {
+            NSLog(@"Caught error in callback: %@", exception.description);
+          }
+          @finally {
+            // Mark that the background task has completed.
+            [[UIApplication sharedApplication] endBackgroundTask:backgroundTaskID];
+          }
         }
       });
-    }
+    });
   }
 }
- */
+
+- (void) storeData:(NSData*)data forKey:(NSString*)key overwrite:(BOOL)overwrite callback:(void (^)(NSError*))callback {
+  
+  [self accessDataWithKey:key access_block:^(NSURL * storedDataUrl, NSError *__autoreleasing * error) {
+    
+    if (![[NSFileManager defaultManager] fileExistsAtPath:storedDataUrl.relativePath] || overwrite) {
+      // Write atomically so that we don't end up with garbage data.
+      [data writeToURL:storedDataUrl options:NSDataWritingAtomic error:error];
+      
+    } else {
+      if (nil != error) {
+        *error = [NSError errorWithDomain:KFErrorDomain code:0 userInfo:nil];
+      }
+    }
+    
+  } callback:callback];
+  
+}
 
 @end

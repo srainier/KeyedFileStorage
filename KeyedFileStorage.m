@@ -23,26 +23,7 @@
 
 #import "KeyedFileStorage.h"
 
-NSString* const KFKey = @"KFSKey";
-NSString* const KFNeedFileNotification = @"KFSNeedFileNotification";
-NSString* const KFGotFileNotification = @"KFSGotFileNotification";
 NSString* const KFErrorDomain = @"KFSErrorDomain";
-
-// NOTE: these are all hexs, some day I could & mask against
-// them to determine the category of error...
-const NSUInteger KFErrorBadKeyPath = 0x01;
-const NSUInteger KFErrorBadData = 0x02;
-const NSUInteger KFErrorFileConflict = 0x05;
-const NSUInteger KFErrorCleaningUp = 0x11;
-const NSUInteger KFErrorAppEnteringBackground = 0x12;
-const NSUInteger KFErrorUnexpectedReadError = 0x21;
-const NSUInteger KFErrorUnexpectedWriteError = 0x22;
-const NSUInteger KFErrorUnexpectedCallbackError = 0x23;
-const NSUInteger KFErrorNoFileForKey = 0x31;
-const NSUInteger KFErrorFileExists = 0x32;
-const NSUInteger KFErrorFileInUse = 0x33;
-const NSUInteger KFErrorFileNotInUse = 0x34;
-
 
 @interface KeyedFileStorage () {
 @private

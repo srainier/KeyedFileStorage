@@ -23,23 +23,7 @@
 
 #import <Foundation/Foundation.h>
 
-extern NSString* const KFKey;
 extern NSString* const KFErrorDomain;
-
-extern const NSUInteger KFErrorBadKeyPath;
-extern const NSUInteger KFErrorBadData;
-extern const NSUInteger KFErrorFileConflict;
-extern const NSUInteger KFErrorCleaningUp;
-extern const NSUInteger KFErrorAppEnteringBackground;
-extern const NSUInteger KFErrorUnexpectedReadError;
-extern const NSUInteger KFErrorUnexpectedWriteError;
-extern const NSUInteger KFErrorUnexpectedCallbackError;
-
-extern const NSUInteger KFErrorNoFileForKey;
-extern const NSUInteger KFErrorFileExists;
-extern const NSUInteger KFErrorFileInUse;
-extern const NSUInteger KFErrorFileNotInUse;
-
 
 @interface KeyedFileStorage : NSObject
 

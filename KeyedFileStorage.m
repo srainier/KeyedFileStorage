@@ -329,11 +329,11 @@ NSString* const KFErrorDomain = @"KFSErrorDomain";
          }];
 }
 
-- (void) storeExistingData:(NSData*)data withKey:(NSString*)key callback:(void (^)(NSError*))callback {
+- (void) storeData:(NSData*)data withKey:(NSString*)key canOverwrite:(BOOL)canOverwrite callback:(void (^)(NSError*))callback {
   // Simply call the helper.
   [self storeData:data
            forKey:key
-        overwrite:YES
+        overwrite:canOverwrite
          callback:callback];
 }
 
@@ -360,15 +360,7 @@ NSString* const KFErrorDomain = @"KFSErrorDomain";
   __block NSData* data = nil;
 
   [self accessDataWithKey:key access_block:^(NSURL * storedDataUrl, NSError *__autoreleasing * error) {
-    // Read the file into the data if it exists on disk.
-    if ([[NSFileManager defaultManager] fileExistsAtPath:storedDataUrl.relativeString]) {
-      data = [NSData dataWithContentsOfURL:storedDataUrl options:NSDataReadingUncached error:error];
-    } else {
-      if (nil != error) {
-        *error = [NSError errorWithDomain:KFErrorDomain code:0 userInfo:nil];
-      }
-    }
-    
+    data = [NSData dataWithContentsOfURL:storedDataUrl options:NSDataReadingUncached error:error];
   } callback:^(NSError * error) {
     callback(error, (nil == error) ? data : nil);
   }];

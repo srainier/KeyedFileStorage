@@ -69,7 +69,7 @@ extern NSString* const KFErrorDomain;
 // Asynchronous data access methods
 //
 - (void) storeNewData:(NSData*)data callback:(void (^)(NSError*, NSString*))callback;
-- (void) storeExistingData:(NSData*)data withKey:(NSString*)key callback:(void (^)(NSError*))callback;
+- (void) storeData:(NSData*)data withKey:(NSString*)key canOverwrite:(BOOL)canOverwrite callback:(void (^)(NSError*))callback;
 - (void) deleteDataWithKey:(NSString*)key callback:(void (^)(NSError*))callback;
 - (void) dataWithKey:(NSString*)key callback:(void (^)(NSError* error, NSData* data))callback;
 

@@ -187,6 +187,12 @@ NSString* const KFErrorDomain = @"KFSErrorDomain";
   [self throwIfNotAccessQueue];
   [self throwIfNotCreated];
   
+  if (nil == key) {
+    return NO;
+  }
+  
+  // TODO: add a check for if the key is of an expected format.
+  
   return [[NSFileManager defaultManager] fileExistsAtPath:[[self fileUrlForKey:key] relativePath]];
 }
 
@@ -396,6 +402,11 @@ NSString* const KFErrorDomain = @"KFSErrorDomain";
 }
 
 - (NSURL*) fileUrlForKey:(NSString*)key {
+  if (nil == key) {
+    NSLog(@"Unable to create file url for nil key");
+    return nil;
+  }
+  
   NSInteger levels = 3;
   NSURL* fileDirectoryUrl = rootDirectory_;
   for (NSInteger level = 0; level < levels; level += 1) {

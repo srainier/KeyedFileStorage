@@ -33,6 +33,9 @@ extern NSString* const KFErrorDomain;
 // Generate a key that is guaranteed to be unique for the storage.
 + (NSString*) uniqueKey;
 
+// Generate a unique key based on the input string.
++ (NSString*) uniqueKeyFromString:(NSString*)seedString;
+
 // All of these 'create' methods perform required initialization of a KeyedFileStorage
 // object.  Storage can be created anywhere you have permission to read and write to disk,
 // and there are convenience methods for putting the storage in the user's Documents
@@ -60,6 +63,7 @@ extern NSString* const KFErrorDomain;
 //
 - (BOOL) storeFile:(NSURL*)fileUrl withKey:(NSString*)key overwrite:(BOOL)overwrite error:(NSError**)error;
 - (NSString*) storeNewFile:(NSURL*)fileUrl error:(NSError**)error;
+- (NSString*) storeNewFile:(NSURL*)fileUrl seedString:(NSString*)seedString error:(NSError**)error;
 - (BOOL) deleteFileWithKey:(NSString*)key error:(NSError**)error;
 - (void) accessFileWithKey:(NSString*)key accessBlock:(void (^)(NSError *error, NSURL *storedFileUrl))accessBlock;
 - (NSURL*) useFileWithKey:(NSString*)key error:(NSError**)error;

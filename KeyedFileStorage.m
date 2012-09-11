@@ -80,6 +80,12 @@ NSString* const KFErrorDomain = @"KFSErrorDomain";
   return uniqueString;
 }
 
++ (NSString*) uniqueKeyFromString:(NSString*)seedString {
+  return [NSString stringWithFormat:@"%@_%@",
+          [[KeyedFileStorage uniqueKey] substringToIndex:8],
+          seedString];
+}
+
 - (BOOL) createWithRootDirectory:(NSURL*)rootDirectory error:(NSError**)error {
   return [self createWithRootDirectory:rootDirectory access_queue:dispatch_get_current_queue() error:error];
 }
@@ -219,14 +225,19 @@ NSString* const KFErrorDomain = @"KFSErrorDomain";
 }
 
 - (NSString*) storeNewFile:(NSURL*)fileUrl error:(NSError**)error {
+  return [self storeNewFile:fileUrl seedString:nil error:error];
+}
 
-  NSString* newKey = [KeyedFileStorage uniqueKey];
+- (NSString*) storeNewFile:(NSURL*)fileUrl seedString:(NSString*)seedString error:(NSError**)error {
+  
+  NSString* newKey = (nil == seedString) ? [KeyedFileStorage uniqueKey] : [KeyedFileStorage uniqueKeyFromString:seedString];
   if ([self storeFile:fileUrl withKey:newKey overwrite:NO error:error]) {
     return newKey;
   } else {
     return nil;
   }
 }
+
 
 - (BOOL) deleteFileWithKey:(NSString*)key error:(NSError**)error {
   [self throwIfNotAccessQueue];

@@ -177,7 +177,8 @@ NSString* const KFErrorDomain = @"KFSErrorDomain";
     dispatch_sync(data_file_queue_, ^{
       // Just wait for this to complete to guarantee the queue is empty.
     });
-    dispatch_release(data_file_queue_);
+    //dispatch_release(data_file_queue_);
+    data_file_queue_ = NULL;
     
     // Cleanup member objects
     rootDirectory_ = nil;
